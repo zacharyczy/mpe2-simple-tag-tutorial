@@ -1,5 +1,6 @@
 """教学示例：将双方的决策函数接入 Simple Tag，不含强化学习训练。
 
+默认使用边长 3 的正方形硬边界；--unbounded 可运行原始无墙版本。
 仅适用于下方固定的 3 追捕者、1 逃逸者、2 障碍物、全实体观测配置。
 先读 README，再按 direction_to_action -> select_action -> main 的顺序阅读。
 """
@@ -11,6 +12,7 @@ from mpe2 import simple_tag_v3
 
 # 只借用两个辅助函数；不会运行 simple_tag_demo.py 中的 main()。
 from simple_tag_demo import capture_success, positive_int
+from square_tag_env import DEFAULT_ARENA_HALF_SIZE, arena_half_size, parallel_env
 
 
 def direction_to_action(direction):
@@ -24,7 +26,40 @@ def direction_to_action(direction):
     return 4 if dy > 0 else 3
 
 
-def select_action(agent, observation, action_space, pursuer_policy, evader_policy):
+def flee_action(observation, half_size):
+    """按远离最近追捕者的投影排序，剔除朝近墙外运动的动作。
+
+    只读自己的观测和公共场地配置，不读取环境内部状态。
+    这是边界感知规则，不包含障碍物规划或对追捕者的运动预测。
+    """
+    relative_positions = observation[8:14].reshape(3, 2)
+    nearest = relative_positions[int(np.argmin(np.linalg.norm(relative_positions, axis=1)))]
+    away = -nearest
+    if half_size is None:
+        return direction_to_action(away)  # --unbounded 复现原规则
+    if np.linalg.norm(away) < 1e-8:
+        return 0
+    position, velocity = observation[2:4], observation[0:2]
+    # 0.05 是固定配置下逃逸者半径；0.08 留出转向余量。
+    # 额外考虑当前朝墙速度在两个物理步长 (dt=0.1) 内的位移。
+    limit = half_size - 0.05
+    directions = {1: np.array([-1., 0.]), 2: np.array([1., 0.]),
+                  3: np.array([0., -1.]), 4: np.array([0., 1.])}
+    candidates = []
+    for action, direction in directions.items():
+        axis = int(np.argmax(np.abs(direction)))
+        sign = direction[axis]
+        clearance = limit - sign * position[axis]
+        margin = 0.08 + max(0.0, sign * velocity[axis]) * 0.2
+        if clearance <= margin:
+            continue
+        candidates.append(action)
+    # 同分按动作编号取先者，与原规则一样横向优先；沿墙两向同分时向下优先。
+    return max(candidates, key=lambda a: float(np.dot(directions[a], away))) if candidates else 0
+
+
+def select_action(agent, observation, action_space, pursuer_policy, evader_policy,
+                  half_size=DEFAULT_ARENA_HALF_SIZE):
     """决策入口：只使用当前智能体自己的 observation，返回一个动作编号。"""
     # agent 是名称字符串，例如 "adversary_0"；observation 是它当前的数值向量。
     is_pursuer = agent.startswith("adversary_")
@@ -44,12 +79,8 @@ def select_action(agent, observation, action_space, pursuer_policy, evader_polic
         prey_relative_position = observation[12:14]
         return direction_to_action(prey_relative_position)
     if not is_pursuer and policy == "flee":
-        # 在这里改逃逸方规则，运行时用 --evader flee 才会进入该分支。
-        # 逃逸者的 [8:14] 依次是三个追捕者相对于自己的二维位置。
-        pursuer_relative_positions = observation[8:14].reshape(3, 2)
-        distances = np.linalg.norm(pursuer_relative_positions, axis=1)
-        nearest = pursuer_relative_positions[int(np.argmin(distances))]
-        return direction_to_action(-nearest)
+        # 根据自己的位置、速度、最近威胁和公共边界选择可行逃离方向。
+        return flee_action(observation, half_size)
     raise ValueError(f"Unsupported policy {policy!r} for {agent!r}")
 
 
@@ -61,18 +92,28 @@ def main():
     parser.add_argument("--max-cycles", type=positive_int, default=100)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--render", choices=("human", "none"), default="human")
+    parser.add_argument("--arena-half-size", type=arena_half_size, default=DEFAULT_ARENA_HALF_SIZE,
+                        help="Square half side length (default: 1.5, full side: 3)")
+    parser.add_argument("--unbounded", action="store_true", help="Use original MPE2 and flee rule")
     parser.add_argument("--inspect", action="store_true", help="Print first episode's first transition")
     args = parser.parse_args()
 
-    # 在这里配置实体数量、动作类型和观测范围；Agent 对象由库内部创建。
-    # continuous_actions=False 会让库创建 Discrete(5)，不必自己创建动作空间。
-    env = simple_tag_v3.parallel_env(
-        num_good=1, num_adversaries=3, num_obstacles=2,
-        max_cycles=args.max_cycles, continuous_actions=False,
-        terminate_on_success=True, curriculum=False,
-        num_agent_neighbors=None, num_landmark_neighbors=None,
-        render_mode="human" if args.render == "human" else None,
-    )
+    # 原随机示例不变；此教学示例默认使用项目中的有限场地环境。
+    half_size = None if args.unbounded else args.arena_half_size
+    if args.unbounded:
+        env = simple_tag_v3.parallel_env(
+            num_good=1, num_adversaries=3, num_obstacles=2,
+            max_cycles=args.max_cycles, continuous_actions=False,
+            terminate_on_success=True, curriculum=False,
+            num_agent_neighbors=None, num_landmark_neighbors=None,
+            render_mode="human" if args.render == "human" else None,
+        )
+    else:
+        env = parallel_env(arena_half_size=half_size, max_cycles=args.max_cycles,
+                           render_mode="human" if args.render == "human" else None)
+    arena_mode = "unbounded" if args.unbounded else "bounded"
+    print(f"arena={arena_mode}, arena_half_size={half_size}, "
+          f"max_cycles={args.max_cycles}, seed={args.seed}")
     successes = 0
     total_steps = 0
     try:
@@ -92,7 +133,7 @@ def main():
                 actions = {
                     agent: select_action(
                         agent, current_observations[agent], env.action_space(agent),
-                        args.pursuers, args.evader,
+                        args.pursuers, args.evader, half_size,
                     )
                     for agent in env.agents
                 }

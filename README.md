@@ -14,7 +14,7 @@ python src/simple_tag_policy_demo.py --pursuers chase --evader flee --episodes 2
 
 后续命令均在仓库根目录执行。已有依赖时可以直接运行；默认不会创建虚拟环境。需要无窗口运行时加 `--render none`。协作流程见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
-想先了解库与动画窗口的整体关系，可先读 [MPE2 库与演示动画说明](MPE2库与演示动画说明.md)，再按本说明逐步阅读和修改代码。
+想先了解库与动画窗口的整体关系，可先读 [MPE2 库与演示动画说明](MPE2-library-and-demo-guide.md)，再按本说明逐步阅读和修改代码。
 
 本项目目前提供环境运行和策略接入演示：双方可以随机行动，也可以让追捕者朝逃逸者移动、让逃逸者远离最近追捕者。当前没有训练神经网络，没有实现 MAPPO/IPPO，也没有实现协同包抄或避障规划。
 
@@ -22,11 +22,63 @@ python src/simple_tag_policy_demo.py --pursuers chase --evader flee --episodes 2
 
 说明依据本机 **MPE2 1.1.1** 的实际源码编写。观测切片与教学规则固定针对 **3 个追捕者、1 个逃逸者、2 个障碍物、离散动作、全实体可见** 的配置。改变实体数量、观测设置或版本后，要重新核对。
 
+## 新增正方形场地与边界感知逃离
+
+规则演示 `src/simple_tag_policy_demo.py` 默认使用 **边长 3、范围 $[-1.5,1.5]^2$** 的场地，墙在画面中固定显示。场地比原来的中央出生区域更大，给逃逸者留出转向与沿墙移动空间；这个尺寸是试运行起点，尚未作为正式实验难度定稿。
+
+```powershell
+# 默认有限场地，观察边框和沿墙逃离
+python src/simple_tag_policy_demo.py --pursuers chase --evader flee --episodes 3
+# 放大到边长 4；参数表示半边长，不是完整边长
+python src/simple_tag_policy_demo.py --pursuers chase --evader flee --arena-half-size 2 --episodes 3
+# 原无墙环境和原 flee 规则，便于对照
+python src/simple_tag_policy_demo.py --pursuers chase --evader flee --unbounded --episodes 3
+# 无窗口检查
+python src/simple_tag_policy_demo.py --pursuers chase --evader flee --render none --episodes 10 --seed 42
+# 边界、规则、状态一致性与 Parallel API 自检，无须额外安装测试库
+python -m unittest discover -s tests -v
+```
+
+环境改动放在 `src/square_tag_env.py`，没有修改 `site-packages`。原 `src/simple_tag_demo.py` 继续使用原始无墙环境，保留为环境检查参考。下面介绍上游初始化与自动缩放的旧示例时，均指原始无墙环境；规则演示的实际创建入口现为 `square_tag_env.parallel_env()`。
+
+### 墙的物理含义与执行时序
+
+- 双方均受墙约束。半径为 $r$ 的智能体中心不能超出 $[-L+r,L-r]^2$，因此整个圆都在墙内。
+- 在物理积分后立即校正位置，清除朝墙外的速度，保留沿墙或朝内的速度；不进行弹性反弹。
+- 墙的校正在奖励、捕获、终止和下一观测计算之前完成，不只是修改画面。
+- 动作仍是 `Discrete(5)`，观测仍是 16/14 维。固定墙的位置由公共场地配置和自身绝对位置确定，不新增墙实体或观测槽位。
+- 保留上游速度、奖励公式、首次接触终止和出生分布：智能体中心在 $[-1,1]^2$，障碍物中心在 $[-0.9,0.9]^2$。原初始化可能存在实体重叠，本次没有改为排斥采样。
+- 原有逃逸者软越界惩罚也保留，它与硬墙是两回事；规则逃逸者不会根据该惩罚学习。比较场地大小时须记录这个事实。
+- `--arena-half-size` 至少为 1.1，以容纳原障碍物出生范围及其半径。增大场地不会自动扩大出生范围。
+
+### flee 怎样选“次优方向”
+
+`select_action()` 的 `flee` 分支调用 `flee_action()`：先找最近的**追捕者**，把四个移动方向按它们在“远离该追捕者”方向上的投影打分，再排除朝近墙外运动的方向，选择剩余最高分动作。
+
+预警区考虑逃逸者半径 0.05、额外余量 0.08 和当前向墙速度未来两个物理步长的位移。它使用自身观测中的位置与速度，以及公共场地配置，不读取环境内部世界状态。处在右墙附近时，向右不可用；若威胁来自左下，则选择向上。角落里若两个向外方向都不可用，就选剩余方向中较好的一个，即使这个动作暂时会接近威胁。投影同分时按动作编号打破平局（左右先于上下，上下同分时向下优先）。
+
+这仍是单步教学规则，没有障碍物避让、惯性精确预测或协作规划。保留约 0.08 的墙边余量也不代表永不碰墙：惯性和实体碰撞仍可能把它推到墙上，硬边界负责兜底。`--unbounded` 同时恢复无墙环境和旧 flee，不能把两种模式的结果差异全部归因于单一改动；需要消融时，应固定同一场地单独比较规则。
+
+正式比较 IPPO、MAPPO 和改进方法时，要共用同一场地、逃逸规则、出生种子、速度和回合上限，不能混用原随机示例的无墙成绩。
+
+### 本次试运行记录
+
+2026-11-12，在 Python 3.12.2、MPE2 1.1.1、PettingZoo 1.27.0 上通过 11 项自动检查（包括 Parallel API、1000 步随机交互的边界不变量、角落择向、渲染与奖励/观测的一致性）。使用 `chase` 对 `flee`、种子 42–71、每回合最多 100 步试运行：
+
+| 环境与规则 | 捕获回合数 | 包含失败的平均步数 |
+| --- | ---: | ---: |
+| 边长 3，边界感知 flee（默认） | 20/30 | 72.67 |
+| 边长 4，边界感知 flee | 13/30 | 78.07 |
+| 原无墙环境，旧 flee | 1/30 | 96.90 |
+
+默认尺寸暂取边长 3：这批初始条件下既有捕获也有逃逸，适合观察转向与沿墙运动。它们是规则演示的试运行数据，没有训练神经网络，也不证明某种场地或规则在一般情形更优。可用上方命令加 `--episodes 30 --max-cycles 100 --seed 42` 复现。
+
+
 ## 先定位你真正要看的代码
 
-### 两个 Python 文件是什么关系
+### Python 文件是什么关系
 
-**这两个文件都是本项目的调用示例，不是 MPE2 库的原版源码。** `simple_tag_demo.py` 是我最先写的随机动作示例；`simple_tag_policy_demo.py` 是后来写的、已经接上简单追踪和逃离规则的教学示例。
+**两个 demo 文件都是本项目的调用示例，不是 MPE2 库的原版源码。** `simple_tag_demo.py` 是我最先写的随机动作示例；`simple_tag_policy_demo.py` 是后来写的、已经接上简单追踪和逃离规则的教学示例。
 
 两个文件都能单独运行。教学示例通过 `from simple_tag_demo import capture_success, positive_int` 只复用两个辅助函数；导入时不会运行随机演示的 `main()`，不会同时启动另一个环境。这是文件末尾 `if __name__ == "__main__"` 的作用。
 
@@ -37,13 +89,13 @@ python src/simple_tag_policy_demo.py --pursuers chase --evader flee --episodes 2
 打开 `src/simple_tag_policy_demo.py`，在 `main()` 中找到这段：
 
 ```python
-env = simple_tag_v3.parallel_env(
-    num_good=1, num_adversaries=3, num_obstacles=2,
-    # 下方还有步数、动作类型、观测范围等参数
-)
+from square_tag_env import parallel_env
+
+env = parallel_env(arena_half_size=args.arena_half_size, max_cycles=args.max_cycles,
+                   render_mode="human")
 ```
 
-这一调用要求库创建 1 个逃逸者、3 个追捕者、2 个障碍物，不需要你再写 `Agent()`。创建后，`env.agents` 中的名称是 `adversary_0`、`adversary_1`、`adversary_2`、`agent_0`。循环中的 `agent` 是其中一个名称字符串，不是你新定义的智能体类。
+这一调用通过项目场地封装，复用库创建 1 个逃逸者、3 个追捕者、2 个障碍物，不需要你再写 `Agent()`。创建后，`env.agents` 中的名称是 `adversary_0`、`adversary_1`、`adversary_2`、`agent_0`。循环中的 `agent` 是其中一个名称字符串，不是你新定义的智能体类。
 
 如果想看真正的智能体对象在哪里创建，打开库文件 `<Python安装目录>\Lib\site-packages\mpe2\simple_tag\simple_tag.py`，搜索 `def make_world` 和 `world.agents =`。当前只是学习和控制动作时，不必改这个库文件。
 
@@ -51,7 +103,7 @@ env = simple_tag_v3.parallel_env(
 
 **默认向量包含哪些内容，由库中的 `Scenario.observation()` 定义；每一步的具体数值，由环境根据当时的世界状态自动生成。** 你不必在策略代码中手工创建 16 个或 14 个观测值。
 
-教学示例的 `num_agent_neighbors=None, num_landmark_neighbors=None` 控制可见实体范围；这是配置，不是在这里逐个定义观测字段。字段排列在库文件 `simple_tag.py` 的 `def observation` 中，详细切片见本说明第 5 节。
+规则演示的场地环境固定使用全实体观测；原始环境的 `num_agent_neighbors=None, num_landmark_neighbors=None` 控制可见实体范围；这是配置，不是在这里逐个定义观测字段。字段排列在库文件 `simple_tag.py` 的 `def observation` 中，详细切片见本说明第 5 节。
 
 在项目里，观测从这两处进入你的程序：
 
@@ -402,7 +454,7 @@ obs[12:14]  # adversary_2 相对于自身的位置
 
 逃逸者每与一个追捕者接触得 -10，另外对自身 x、y 坐标分别计算靠近或超出区域的惩罚：绝对值小于 0.9 时该坐标无惩罚，从 0.9 开始惩罚递增。
 
-这是奖励惩罚，不是不可越过的墙。图形相机还会自动缩放，窗口边缘不等于惩罚边界。当前未启用距离塑形奖励，默认也没有独立的“撞障碍物扣分”项，障碍物主要提供物理碰撞响应。
+这是奖励惩罚，不是不可越过的墙。原无墙环境的图形相机会自动缩放，窗口边缘不等于惩罚边界；新增有限场地则使用固定相机和可见硬墙。当前未启用距离塑形奖励，默认也没有独立的“撞障碍物扣分”项，障碍物主要提供物理碰撞响应。
 
 ### 7.2 奖励不等于成功率
 
@@ -476,7 +528,7 @@ return direction_to_action(prey_relative_position)
 
 相对位置从自己指向目标，直接朝它移动。三个追捕者各执行相同规则，没有包抄、角色分工或路径规划。
 
-逃逸方的 `flee`：
+逃逸方的 `flee` 先用下面的逻辑计算远离方向（`--unbounded` 下直接返回这个动作）：
 
 ```python
 pursuer_relative_positions = observation[8:14].reshape(3, 2)
@@ -485,11 +537,13 @@ nearest = pursuer_relative_positions[int(np.argmin(distances))]
 return direction_to_action(-nearest)
 ```
 
+默认有限场地实际由 `return flee_action(observation, half_size)` 调用完整规则；辅助函数还会排除朝墙外的方向，详见前面的新增场地说明。
+
 6 个数排成三行，每行是一个追捕者相对位置。`norm(..., axis=1)` 得到三个距离；`argmin` 选择最近者；对指向威胁的向量取负号，得到远离威胁的方向。
 
 `random` 分支调用动作空间采样；`stay` 分支固定返回 0，只表示不施加主动控制，不承诺位置固定。
 
-这些规则由本项目提供，不是环境自动安排的内置对手策略。`flee` 没有避障、边界约束、惯性补偿或长期规划，可能逃入障碍物或惩罚区域，只用于理解接口。
+这些规则由本项目提供，不是环境自动安排的内置对手策略。默认有限场地的 `flee` 已加入边界感知与基于速度的预警，但没有避障或长期规划，仍可能逃入障碍物或惩罚区域。`--unbounded` 恢复没有边界感知的旧规则。
 
 ### 9.3 main 提交双方动作
 
@@ -498,7 +552,7 @@ current_observations = observations
 actions = {
     agent: select_action(
         agent, current_observations[agent], env.action_space(agent),
-        args.pursuers, args.evader,
+        args.pursuers, args.evader, half_size,
     )
     for agent in env.agents
 }
@@ -570,6 +624,8 @@ return 2 if dx > 0 else 1
 这个规则故意忽略纵向，不保证抓到目标。目的是核对：修改的几行是否真的影响追捕方，而不影响逃逸方。
 
 理解后可读取 `obs[4:8]` 构造避障方向，或利用 `obs[8:12]` 的队友位置减少重复追踪。得到障碍物信息，不等于环境会自动避障，具体决策仍要实现。
+
+修改默认逃逸规则时，继续进入 `flee_action()`，其中边界感知已实现；旧的纯远离逻辑只用于 `--unbounded`。
 
 若新增策略名如 `avoid`，要同时增加命令行 `choices` 和 `select_action()` 的对应分支。只添加命令行选项不会自动实现行为。
 
@@ -662,6 +718,8 @@ python -c "from pathlib import Path; import mpe2; print(Path(mpe2.__file__).reso
 **逃逸方为什么叫 `agent_0`？** 这是本场景的命名约定，红色追捕者叫 `adversary_*`，绿色逃逸者叫 `agent_0`。
 
 **观测为什么不是图片？** 当前使用场景给出的数值向量；图像是另一种输入方案，需要另外取像素并处理。
+
+**为什么原随机示例没有墙？** 按协作约定保留原示例作环境参考；有限场地在规则演示中默认启用。
 
 **所有追捕者奖励相同，是否代表协作？** 不代表。这是默认团队奖励的计算方式。
 
