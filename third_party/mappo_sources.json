@@ -1,0 +1,9 @@
+{
+  "repository": "https://github.com/marlbenchmark/on-policy",
+  "commit": "de66d7a4b23fac2513f56f96f73b3f5cb96695ac",
+  "files": {
+    "onpolicy/algorithms/r_mappo/r_mappo.py": "8a889d010cb5e327eeffa9d8ab1d910cab384e295d0690dd05e268dc56e047be",
+    "onpolicy/algorithms/r_mappo/algorithm/r_actor_critic.py": "db6ff5de5b56e8a28a91181acf831bddd1c8b12d124a26025d9f63bcd3f98ee5",
+    "onpolicy/utils/shared_buffer.py": "78a19d8a0e7a49cde1f3efde45cac193c04d9c3e861bc979e57824ec9e000d0e"
+  }
+}

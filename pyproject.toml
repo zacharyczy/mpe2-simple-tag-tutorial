@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "chasing-mappo"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = ["mpe2==1.1.1", "torch==2.8.0", "imageio>=2.37,<3", "matplotlib>=3.9,<4"]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+py-modules = ["square_tag_env", "simple_tag_demo", "simple_tag_policy_demo"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["chasing_rl*"]
