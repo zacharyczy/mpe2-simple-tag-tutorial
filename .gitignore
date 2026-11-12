@@ -11,3 +11,8 @@ outputs/
 .DS_Store
 Thumbs.db
 *.log
+
+# Local package build metadata
+*.egg-info/
+build/
+dist/

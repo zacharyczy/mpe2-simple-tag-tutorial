@@ -32,6 +32,23 @@ class SquareWorld(ExtendedWorld):
         super().__init__()
         self.half_size = arena_half_size(half_size)
 
+    def get_collision_force(self, entity_a, entity_b):
+        """定义完全重合时的接触法向，避免上游 delta_pos / 0 产生 NaN。
+
+        非零距离完全复用上游；零距离用实体顺序决定对角单位法向，
+        交换实体时法向反号。此处不添加随机数或修改实体实际位置。
+        """
+        if (entity_a is entity_b or not entity_a.collide or not entity_b.collide
+                or np.linalg.norm(entity_a.state.p_pos - entity_b.state.p_pos) > 0):
+            return super().get_collision_force(entity_a, entity_b)
+        sign = 1.0 if self.entities.index(entity_a) < self.entities.index(entity_b) else -1.0
+        normal = np.full(self.dim_p, sign / np.sqrt(self.dim_p))
+        distance_min = entity_a.size + entity_b.size
+        penetration = np.logaddexp(0, distance_min / self.contact_margin) * self.contact_margin
+        force = self.contact_force * normal * penetration
+        return [force if entity_a.movable else None,
+                -force if entity_b.movable else None]
+
     def integrate_state(self, p_force):
         # 上游仍负责阻尼、控制、最高速度和实体碰撞。
         super().integrate_state(p_force)

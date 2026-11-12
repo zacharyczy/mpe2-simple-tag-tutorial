@@ -1,1 +1,6 @@
 mpe2==1.1.1
+# MAPPO networks and optimization
+torch==2.8.0
+# Validation curves and optional GIF demonstration
+matplotlib>=3.9,<4
+imageio>=2.37,<3

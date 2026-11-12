@@ -1,3 +1,47 @@
+# MAPPO 学习基线
+
+新增前馈共享策略 MAPPO；原来的规则演示与环境导读保留在下方。新增训练适配使用成功奖励1、每步代价0.01，与旧演示的原生接触奖励10不同。
+
+详细接口见 [MAPPO 架构](docs/mappo_architecture.md)，代码来源见 [上游移植说明](docs/upstream_sources.md)。
+
+本次验证见 [实施与验证记录](docs/implementation_validation.md)：23项测试通过，完成5万步单种子短训练；最终20回合开发验证成功率为0%，尚未显示有效学习。
+
+## 安装与运行
+
+使用自己选定的 Python 环境；项目不自动创建或激活虚拟环境。若需要隔离环境，可自行创建并激活后执行。当前 MAPPO 开发使用 Python 3.12；安装器会检查各平台依赖可用性。
+
+```bash
+python -m pip install -r requirements.txt
+python -m pip install --no-build-isolation --no-deps -e .
+python -m unittest discover -s tests -v
+python scripts/train.py --config configs/mappo_smoke.json --output outputs/mappo_smoke
+python scripts/train.py --config configs/mappo_baseline.json --output outputs/mappo_seed42
+```
+
+若当前环境没有构建工具，先执行 `python -m pip install setuptools`。Windows PowerShell 也可使用上述命令。输出目录必须为空，防止覆盖既有实验。通过 `--seed 43` 等可以分别训练独立模型，每次使用不同输出目录；这不是精确断点续训。
+
+加载模型，用开发/验证条件检查（不是留出测试）：
+
+```bash
+python scripts/evaluate.py --checkpoint outputs/mappo_seed42/final.pt --episodes 20 --seed-start 1000000 --output outputs/mappo_seed42/loaded_validation.json
+python scripts/evaluate.py --rule chase --config configs/mappo_baseline.json --episodes 20 --seed-start 1000000 --output outputs/rule_validation.json
+python scripts/render_policy.py --checkpoint outputs/mappo_seed42/final.pt --gif outputs/mappo_seed42/demo.gif
+```
+
+不指定 `--gif` 时打开人类可见窗口。`evaluate.py` 默认200回合，并支持 `--opponent random`；正式测试必须使用预先留出的种子，不能将已用于开发的种子再次声称为独立测试。
+
+## 输出内容
+
+- `config.json`、`provenance.json`：完整配置、代码与依赖版本、未提交源码哈希。
+- `metrics.jsonl`、`validation_*.json`：验证曲线与回合级原始记录。
+- `episodes.jsonl`：训练回合的成功、步数与累计团队奖励。
+- `checkpoint_*.pt`、`final.pt`：定期快照与固定预算末尾模型。
+- `validation_curve.png`：成功率和包含失败的平均步数曲线。
+
+所有模型、日志、曲线与演示在 outputs 内，默认不提交Git。requirements-lock.txt记录Mac开发环境实际版本，不保证所有平台的CUDA/二进制轮子相同。Windows MAPPO运行仍需在目标机器实测。
+
+---
+
 # Simple Tag 入门与追逃决策代码导读
 
 ## 克隆后快速运行
@@ -16,7 +60,7 @@ python src/simple_tag_policy_demo.py --pursuers chase --evader flee --episodes 2
 
 想先了解库与动画窗口的整体关系，可先读 [MPE2 库与演示动画说明](MPE2-library-and-demo-guide.md)，再按本说明逐步阅读和修改代码。
 
-本项目目前提供环境运行和策略接入演示：双方可以随机行动，也可以让追捕者朝逃逸者移动、让逃逸者远离最近追捕者。当前没有训练神经网络，没有实现 MAPPO/IPPO，也没有实现协同包抄或避障规划。
+以下两份原有示例提供环境运行和策略接入演示：双方可以随机行动，也可以让追捕者朝逃逸者移动、让逃逸者远离最近追捕者。这两个演示脚本本身不训练神经网络；新增 MAPPO 训练入口见本文开头。当前没有实现 IPPO、协同包抄或避障规划。
 
 这份说明带你回答三个问题：**环境替我们做什么？自己的决策写在哪里？训练算法以后接在哪里？**
 
